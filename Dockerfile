@@ -1,7 +1,9 @@
-# Lite version
+# =======================================
+# Stage 1: Base Image (Lite)
+# =======================================
 FROM python:3.10-slim AS lite
 
-# Common dependencies
+# System dependencies
 RUN apt-get update -qqy && \
     apt-get install -y --no-install-recommends \
         ssh \
@@ -12,53 +14,54 @@ RUN apt-get update -qqy && \
         libpoppler-dev \
         unzip \
         curl \
-        cargo
+        cargo && \
+    rm -rf /var/lib/apt/lists/*
 
-# Setup args
-ARG TARGETPLATFORM
-ARG TARGETARCH
+# Environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=UTF-8 \
+    UV_SYSTEM_PYTHON=1
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONIOENCODING=UTF-8
-ENV TARGETARCH=${TARGETARCH}
-
-# Create working directory
+# Working directory
 WORKDIR /app
 
+# Install uv (fast Python package manager)
+ADD https://astral.sh/uv/install.sh /uv-installer.sh
+RUN sh /uv-installer.sh && rm /uv-installer.sh
+ENV PATH="/root/.local/bin/:$PATH"
+
+# Copy relevant source code
+COPY packages/kotaemon /app/kotaemon
+COPY packages/rag-system /app/rag-system
+
 # Download pdfjs
-RUN ls
-ADD rag_system/kotaemon/scripts/download_pdfjs.sh /app/scripts/download_pdfjs.sh
-RUN chmod +x /app/scripts/download_pdfjs.sh
-ENV PDFJS_PREBUILT_DIR="/app/libs/ktem/ktem/assets/prebuilt/pdfjs-dist"
-RUN bash /app/scripts/download_pdfjs.sh $PDFJS_PREBUILT_DIR
+RUN chmod +x /app/kotaemon/scripts/download_pdfjs.sh
+ENV PDFJS_PREBUILT_DIR="/app/kotaemon/libs/ktem/ktem/assets/prebuilt/pdfjs-dist"
+RUN bash /app/kotaemon/scripts/download_pdfjs.sh $PDFJS_PREBUILT_DIR
 
-# Copy contents
-COPY rag_system /app
-COPY rag_system/kotaemon/launch.sh /app/launch.sh
-COPY rag_system/kotaemon/.env.example /app/.env
+# Install project dependencies using uv
+RUN uv pip install -e "/app/kotaemon/libs/kotaemon" \
+    && uv pip install -e "/app/kotaemon/libs/ktem" \
+    && uv pip install -e "/app/kotaemon/libs/pipelineblocks" \
+    && uv pip install "pdfservices-sdk@git+https://github.com/niallcm/pdfservices-python-sdk.git@bump-and-unfreeze-requirements"
 
-WORKDIR /app/kotaemon
+# Copy launcher and environment files
+COPY packages/kotaemon/launch.sh /app/launch.sh
+COPY packages/kotaemon/settings.yaml.example /app/settings.yaml
+RUN chmod +x /app/launch.sh
 
-# Install pip packages
-RUN pip install -e "libs/kotaemon" \
-    && pip install -e "libs/ktem" \
-    && pip install -e "libs/pipelineblocks" \
-    && pip install "pdfservices-sdk@git+https://github.com/niallcm/pdfservices-python-sdk.git@bump-and-unfreeze-requirements"
-
-# Clean up
-RUN apt-get autoremove \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && rm -rf ~/.cache
+# Cleanup
+RUN apt-get autoremove -y && apt-get clean && rm -rf ~/.cache
 
 ENTRYPOINT ["sh", "/app/launch.sh"]
 
-# Full version
+# =======================================
+# Stage 2: Full Image (with optional extras)
+# =======================================
 FROM lite AS full
 
-# Additional dependencies for full version
+# Additional system dependencies
 RUN apt-get update -qqy && \
     apt-get install -y --no-install-recommends \
         tesseract-ocr \
@@ -67,25 +70,19 @@ RUN apt-get update -qqy && \
         libxext6 \
         libreoffice \
         ffmpeg \
-        libmagic-dev
+        libmagic-dev && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install torch and torchvision for unstructured
-RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-RUN pip install psycopg2-binary logfire pydantic==2.10.6
+# Install Torch and extras with uv
+RUN uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+RUN uv pip install psycopg2-binary logfire "pydantic==2.10.6"
 
-# Install additional pip packages
-RUN pip install -e "libs/kotaemon[adv]" \
-    && pip install unstructured[all-docs]
+# Install advanced and unstructured dependencies
+RUN uv pip install -e "/app/kotaemon/libs/kotaemon[adv]" \
+    && uv pip install "unstructured[all-docs]" \
+    && uv pip install "docling<=2.5.2"
 
-# Install lightRAG
-ENV USE_LIGHTRAG=false
-
-RUN pip install "docling<=2.5.2"
-
-# Clean up
-RUN apt-get autoremove \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && rm -rf ~/.cache
+# Final cleanup
+RUN apt-get autoremove -y && apt-get clean && rm -rf ~/.cache
 
 CMD ["sh", "/app/launch.sh"]

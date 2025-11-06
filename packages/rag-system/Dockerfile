@@ -17,23 +17,27 @@ RUN apt-get update -qqy && \
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONIOENCODING=UTF-8
+    PYTHONIOENCODING=UTF-8 \
+    UV_SYSTEM_PYTHON=1
 
 WORKDIR /app
 
-# Download pdfjs
-COPY kotaemon/scripts/download_pdfjs.sh /app/scripts/download_pdfjs.sh
-RUN chmod +x /app/scripts/download_pdfjs.sh
-ENV PDFJS_PREBUILT_DIR="/app/libs/ktem/ktem/assets/prebuilt/pdfjs-dist"
-RUN bash scripts/download_pdfjs.sh $PDFJS_PREBUILT_DIR
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.cargo/bin:$PATH"
 
-# Copy project files
-COPY kotaemon/libs /app/libs
-COPY kotaemon/launch.sh /app/launch.sh
-COPY kotaemon/.env.example /app/.env
+# Copy kotaemon-related files
+COPY ../kotaemon /app/kotaemon
 COPY flowsettings.py /app/flowsettings.py
-COPY pipeline_scripts /app/pipeline_scripts
-COPY taxonomy /app/taxonomy
+
+# Download pdfjs
+RUN chmod +x kotaemon/scripts/download_pdfjs.sh
+ENV PDFJS_PREBUILT_DIR="/app/kotaemon/libs/ktem/ktem/assets/prebuilt/pdfjs-dist"
+RUN bash kotaemon/scripts/download_pdfjs.sh $PDFJS_PREBUILT_DIR
+
+# Sync dependencies via uv
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-cache
 
 
 # ===============================
@@ -41,15 +45,11 @@ COPY taxonomy /app/taxonomy
 # ===============================
 FROM base-builder AS dev
 
-RUN --mount=type=ssh \
-    --mount=type=cache,target=/root/.cache/pip \
-    pip install -e "libs/kotaemon[adv]" && \
-    pip install -e "libs/ktem" && \
-    pip install -e "libs/pipelineblocks" && \
-    pip install -e "pipeline_scripts" && \
-    pip install -e "taxonomy" && \
-    pip install boto3 && \
-    pip install "pdfservices-sdk@git+https://github.com/niallcm/pdfservices-python-sdk.git@bump-and-unfreeze-requirements"
+RUN uv pip install -e "/app/kotaemon/libs/kotaemon[adv]" && \
+    uv pip install -e "/app/kotaemon/libs/ktem" && \
+    uv pip install -e "/app/kotaemon/libs/pipelineblocks" && \
+    uv pip install boto3 && \
+    uv pip install "pdfservices-sdk@git+https://github.com/niallcm/pdfservices-python-sdk.git@bump-and-unfreeze-requirements"
 
 
 # ===============================
@@ -57,15 +57,11 @@ RUN --mount=type=ssh \
 # ===============================
 FROM base-builder AS prod
 
-RUN --mount=type=ssh \
-    --mount=type=cache,target=/root/.cache/pip \
-    pip install "libs/kotaemon[adv]" && \
-    pip install "libs/ktem" && \
-    pip install "libs/pipelineblocks" && \
-    pip install "pipeline_scripts" && \
-    pip install "taxonomy" && \
-    pip install boto3 && \
-    pip install "pdfservices-sdk@git+https://github.com/niallcm/pdfservices-python-sdk.git@bump-and-unfreeze-requirements"
+RUN uv pip install "/app/kotaemon/libs/kotaemon[adv]" && \
+    uv pip install "/app/kotaemon/libs/ktem" && \
+    uv pip install "/app/kotaemon/libs/pipelineblocks" && \
+    uv pip install boto3 && \
+    uv pip install "pdfservices-sdk@git+https://github.com/niallcm/pdfservices-python-sdk.git@bump-and-unfreeze-requirements"
 
 
 # ===============================
@@ -96,7 +92,7 @@ COPY --from=dev /app /app
 COPY --from=dev /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
 COPY --from=dev /usr/local/bin /usr/local/bin
 
-ENTRYPOINT ["/bin/sh", "-c", "tail -f /dev/null"]
+ENTRYPOINT ["/bin/bash"]
 
 
 # ===============================
@@ -108,4 +104,5 @@ COPY --from=prod /app /app
 COPY --from=prod /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
 COPY --from=prod /usr/local/bin /usr/local/bin
 
-ENTRYPOINT ["sh", "/app/launch.sh"]
+RUN chmod +x /app/kotaemon/launch.sh
+ENTRYPOINT ["sh", "/app/kotaemon/launch.sh"]
