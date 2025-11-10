@@ -28,7 +28,6 @@ packages = ["src/wsl_library"]
 members = [
     "packages/wsl-core",
     "packages/wsl-library",
-    # "packages/kotaemon",
     "packages/rag-system",
 ]
 
